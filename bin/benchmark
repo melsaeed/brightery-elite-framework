@@ -1,0 +1,30 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+/** In-process microbenchmark, not an end-to-end HTTP load or security test. */
+require dirname(__DIR__).'/bootstrap/autoload.php';
+use Brightery\Core\Container;
+use Brightery\Core\Http\{Request,Response,Router};
+$iterations=10000;
+foreach(array_slice($argv,1) as $arg){
+    if(!preg_match('/^--iterations=([1-9][0-9]{1,5})$/D',$arg,$match)){
+        fwrite(STDERR,"Usage: php bin/benchmark [--iterations=N (10..999999)]\n");exit(2);
+    }
+    $iterations=(int)$match[1];
+}
+$router=new Router();$router->get('/items/{id}',static fn($r,$p)=>Response::json(['id'=>$p['id']]));
+$request=new Request('GET','/items/123');
+$container=new Container();$container->bind(stdClass::class,static fn()=>new stdClass());
+$latencies=[];$started=hrtime(true);
+for($i=0;$i<$iterations;$i++){
+    $at=hrtime(true);
+    if($router->dispatch($request)->status!==200||!($container->get(stdClass::class) instanceof stdClass))throw new RuntimeException('Benchmark result invalid');
+    $latencies[]=((hrtime(true)-$at)/1_000_000);
+}
+$seconds=(hrtime(true)-$started)/1_000_000_000;sort($latencies,SORT_NUMERIC);
+$result=['scope'=>'router_and_container_only','iterations'=>$iterations,'elapsed_seconds'=>round($seconds,3),
+    'ops_per_second'=>round($iterations/max($seconds,0.000001)),
+    'p50_ms'=>round($latencies[(int)floor(($iterations-1)*.50)],4),
+    'p95_ms'=>round($latencies[(int)floor(($iterations-1)*.95)],4),
+    'peak_memory_bytes'=>memory_get_peak_usage(true)];
+echo json_encode($result,JSON_PRETTY_PRINT|JSON_THROW_ON_ERROR)."\n";

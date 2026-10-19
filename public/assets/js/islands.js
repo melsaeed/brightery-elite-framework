@@ -1,0 +1,9 @@
+/* Brightery Islands: progressive enhancement without a frontend runtime or unsafe HTML insertion. */
+(()=>{'use strict';const components=new Map();const active=new WeakSet();
+const api={register:(name,init)=>{if(!/^[a-z][a-z0-9-]*$/.test(name)||typeof init!=='function')throw Error('Invalid component');components.set(name,init);api.mount()},mount:(root=document)=>{root.querySelectorAll('[data-bf-island]').forEach(node=>{if(active.has(node))return;const initializer=components.get(node.dataset.bfIsland);if(!initializer)return;let props={};try{props=JSON.parse(node.dataset.bfProps||'{}')}catch{};active.add(node);initializer(node,props)})}};
+Object.defineProperty(window,'BrighteryIslands',{value:api,writable:false});
+api.register('tags',root=>{const list=root.querySelector('[data-bf-tags-list]'),input=root.querySelector('[data-bf-tags-input]'),hidden=root.querySelector('[data-bf-tags-value]');if(!list||!input||!hidden)return;let tags=hidden.value.split(',').map(v=>v.trim()).filter(Boolean).slice(0,25);
+const draw=()=>{list.replaceChildren();hidden.value=tags.join(',');tags.forEach((tag,index)=>{const pill=document.createElement('span');pill.className='bf-tag';pill.append(document.createTextNode(tag));const button=document.createElement('button');button.type='button';button.textContent='×';button.setAttribute('aria-label','Remove '+tag);button.addEventListener('click',()=>{tags.splice(index,1);draw()});pill.append(button);list.append(pill)})};
+const add=()=>{const value=input.value.trim().replace(/,/g,'');if(value&&value.length<=80&&tags.length<25&&!tags.includes(value))tags.push(value);input.value='';draw()};input.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===','){event.preventDefault();add()}});input.addEventListener('blur',add);draw()});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>api.mount());else api.mount();
+})();

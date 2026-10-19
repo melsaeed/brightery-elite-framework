@@ -1,0 +1,9 @@
+{
+  "name": "TenantNotes",
+  "version": "0.2.0",
+  "description": "Sample tenant-isolated service provider and migration (disabled by default)",
+  "required": false,
+  "framework": "^0.2.0",
+  "dependencies": {"System": ">=0.1.0"},
+  "providers": ["Modules\\TenantNotes\\NotesServiceProvider"]
+}

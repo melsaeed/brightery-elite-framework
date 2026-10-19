@@ -1,0 +1,25 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+require dirname(__DIR__).'/bootstrap/autoload.php';
+$assets=['css/app.min.css'=>'css/app.css','js/app.js'=>'js/app.js','js/islands.js'=>'js/islands.js','js/form-studio.js'=>'js/form-studio.js','js/module-builder.js'=>'js/module-builder.js','js/crud-controls.js'=>'js/crud-controls.js','js/module-evolve.js'=>'js/module-evolve.js'];
+$target=base_path('public/assets/build');if(!is_dir($target))mkdir($target,0755,true);
+$manifest=[];
+foreach($assets as $logical=>$relative){
+    $source=base_path('public/assets/'.$relative);
+    if(!is_file($source))throw new RuntimeException('Missing asset: '.$source);
+    $content=(string)file_get_contents($source);
+    if($logical==='css/app.min.css'){
+        $content=(string)preg_replace('~/\*[\s\S]*?\*/~','',$content);
+        $content=(string)preg_replace('/\s+/',' ',$content);
+        $content=(string)preg_replace('/\s*([{};,>])\s*/','$1',$content);
+        file_put_contents(base_path('public/assets/css/app.min.css'),$content,LOCK_EX);
+    }
+    $hash=substr(hash('sha256',$content),0,16);
+    $basename=pathinfo($relative,PATHINFO_FILENAME);$extension=pathinfo($relative,PATHINFO_EXTENSION);
+    $filename=$basename.'.'.$hash.'.'.$extension;
+    if(file_put_contents($target.'/'.$filename,$content,LOCK_EX)===false)throw new RuntimeException('Asset build failed');
+    $manifest[$logical]='/assets/build/'.$filename;
+    echo $logical.' => '.$manifest[$logical]."\n";
+}
+file_put_contents(base_path('public/assets/manifest.json'),json_encode($manifest,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n",LOCK_EX);

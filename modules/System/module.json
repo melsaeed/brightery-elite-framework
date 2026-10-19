@@ -1,0 +1,8 @@
+{
+  "name": "System",
+  "version": "0.3.5",
+  "description": "Core admin, auth, settings, i18n and RBAC",
+  "required": true,
+  "framework": "^0.2.0",
+  "min_release": ">=0.7.0"
+}

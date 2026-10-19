@@ -1,0 +1,405 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+$kernel=require dirname(__DIR__).'/bootstrap/app.php';
+use Brightery\Core\{Database,App};
+use Brightery\Core\Modules\{ModuleManager,ModuleInstaller,ModulePackage,TrustedKeys};
+use Brightery\Core\Cache\{CacheInterface,FileCache};
+use Brightery\Core\I18n\Translator;
+use Brightery\Core\Database\Migrator;
+use Brightery\Core\Kernel;
+use Brightery\Core\Developer\{ModuleScaffolder,ModuleDiagnostics};
+use Brightery\Core\Operations\{WorkerRegistry,HealthReport,ReleasePreflight,ReleaseCoordinator,MediaReconciler};
+use Brightery\Core\Tenancy\{HostTenantResolver,TenantInvitations,TenantMemberships};
+$args=$_SERVER['argv'];$command=$args[1]??'help';
+try{
+ switch($command){
+    case 'help':
+      echo "Brightery Framework v".Kernel::VERSION."\n\n";
+      echo "  setup:key                  Create or rotate APP_KEY in .env\n";
+      echo "  migrate                    Apply core and enabled module MySQL migrations\n";
+      echo "  migrate:status             Display migration status\n";
+      echo "  user:create EMAIL NAME     Create super-admin interactively\n";
+      echo "  make:module BLUEPRINT.json [--apply]  Scaffold app module (dry run default)\n";
+      echo "  evolve:module NAME BLUEPRINT.json [--apply]  Append nullable fields (dry run default)\n";
+      echo "  module:migrate-disabled NAME [--apply]  Apply reviewed migrations while offline\n";
+      echo "  module:list                List modules\n";
+      echo "  module:validate            Validate module graph and constraints\n";
+      echo "  module:diagnose NAME       Read-only generated module file checks\n";
+      echo "  module:graph               Show module dependency order\n";
+      echo "  module:plan NAME enable|disable [--json]  Preview validated module changes\n";
+      echo "  module:enable NAME         Activate module\n";
+      echo "  module:disable NAME        Deactivate module\n";
+      echo "  module:keygen KEY_ID       Generate offline Ed25519 signing keypair\n";
+      echo "  module:key:trust KEY_ID PUBLIC_BASE64  Trust a module signing public key\n";
+      echo "  module:key:revoke KEY_ID     Remove a trusted public key\n";
+      echo "  module:pack NAME KEY_ID SECRET_FILE OUTPUT.bfp  Sign app-owned module\n";
+      echo "  module:verify FILE.bfp     Verify signature, compatibility and proposed changes\n";
+      echo "  module:install FILE.bfp [--apply] Dry run by default; explicit apply\n";
+      echo "  module:backups NAME        List local module backups\n";
+      echo "  module:rollback NAME BACKUP_ID [--apply] File rollback (no DB rollback)\n";
+      echo "  route:list                 List routes\n";
+      echo "  compat:check              Validate stable module extension API and module graph\n";
+      echo "  ops:requests [--limit=N]  Summarize bounded HTTP request telemetry\n";
+      echo "  cache:clear                Clear local file cache\n";
+      echo "  lang:export LOCALE         Print dictionary JSON\n";
+      echo "  lang:import LOCALE FILE    Import dictionary JSON\n";
+      echo "  tenant:list                List registered tenants\n";
+      echo "  tenant:create SLUG NAME    Create a tenant\n";
+      echo "  tenant:domain ID HOST      Assign a tenant hostname\n";
+      echo "  tenant:members ID          List tenant memberships\n";
+      echo "  invite:prune               Remove expired/used invitation records\n";
+      echo "  queue:work [--once|--max=N] Process queued jobs (bounded)\n";
+      echo "  queue:stats               Count pending, reserved, completed, failed jobs\n";
+      echo "  schedule:run              Dispatch scheduled jobs due this UTC minute\n";
+      echo "  schedule:list             Display registered schedule definitions\n";
+      echo "  api:token USER_ID TENANT_ID|central NAME [scopes] [days] Create personal token (TTY only)\n";
+      echo "  api:revoke TOKEN_ID USER_ID Revoke a user's API token\n";
+      echo "  mfa:reset USER_ID           Emergency supervised MFA reset (TTY required)\n";
+      echo "  mail:test ADDRESS          Queue a test email to check SMTP configuration\n";
+      echo "  session:revoke-all USER_ID  Revoke all active sessions (interactive TTY)\n";
+      echo "  doctor                     Run environment checks\n";
+      echo "  production:check [--json]  Fail-closed production readiness gate\n";
+      echo "  ops:status [--json]        Read-only queue/worker health report\n";
+      echo "  ops:prune [--days=N]       Prune obsolete worker heartbeat records\n";
+      echo "  media:reconcile --central|--tenant=N [--apply --confirm=SCOPE]  Preview/repair quota counters\n";
+      echo "  deploy:preflight [--json]  Validate runtime, modules, and migrations\n";
+      echo "  deploy:finalize [--apply]  Dry-run or guarded migration/cache release finalization\n";
+      exit(0);
+    case 'setup:key':
+      $file=base_path('.env');if(!is_file($file))copy(base_path('.env.example'),$file);
+      $data=file_get_contents($file);
+      $key=bin2hex(random_bytes(32));
+      $data=preg_replace('/^APP_KEY=.*$/m','APP_KEY='.$key,$data);
+      if(!str_contains($data,'APP_KEY='))$data.="\nAPP_KEY=$key\n";
+      file_put_contents($file,$data,LOCK_EX);chmod($file,0600);
+      echo "Application key generated; never commit .env.\n";break;
+    case 'migrate':
+      $migrator=App::get()->service(Migrator::class);
+      $applied=$migrator->run(static fn(string $name)=>print("APPLIED: $name\n"));
+      echo "Migrations finished: ".count($applied)." new.\n";break;
+    case 'migrate:status':
+      foreach(App::get()->service(Migrator::class)->status() as $version=>$status)echo str_pad($status,10)." $version\n";
+      break;
+    case 'user:create':
+      if(count($args)<4)throw new RuntimeException('Usage: user:create EMAIL NAME');
+      $email=strtolower(trim($args[2]));$name=trim($args[3]);
+      if(!filter_var($email,FILTER_VALIDATE_EMAIL)||$name===''||strlen($name)>160)throw new RuntimeException('Invalid user input');
+      if(!function_exists('stream_isatty')||!stream_isatty(STDIN))throw new RuntimeException('Interactive terminal required to enter password');
+      fwrite(STDOUT,'Password (12+ characters; hidden if stty exists): ');
+      if(PHP_OS_FAMILY!=='Windows')shell_exec('stty -echo');
+      $pw=rtrim((string)fgets(STDIN),"\r\n");
+      if(PHP_OS_FAMILY!=='Windows')shell_exec('stty echo');echo "\n";
+      if(strlen($pw)<12)throw new RuntimeException('Password must contain at least 12 characters');
+      $db=App::get()->service(Database::class);
+      $db->transactional(function(Database $db)use($name,$email,$pw){
+        $db->execute('INSERT INTO users(name,email,password_hash) VALUES(?,?,?)',[$name,$email,password_hash($pw,PASSWORD_ARGON2ID)]);
+        $db->execute('INSERT INTO user_groups(user_id,group_id) VALUES(?,?)',[(int)$db->pdo()->lastInsertId(),1]);
+      });echo "Super Admin created.\n";break;
+    case 'module:diagnose':
+      $name=$args[2]??'';$report=(new ModuleDiagnostics(base_path('modules')))->inspect($name);
+      foreach($report['checks'] as $check)echo ($check['ok']?'OK  ':'FAIL').' '.$check['name'].($check['detail']!==''?' — '.$check['detail']:'')."\n";
+      if(!$report['ok'])exit(2);
+      break;
+    case 'module:validate':
+      $names=App::get()->service(ModuleManager::class)->validate();
+      echo "Module manifest/dependency validation passed for ".count($names)." modules.\n";break;
+    case 'module:graph':
+      foreach(App::get()->service(ModuleManager::class)->ordered(false) as $name=>$manifest){
+        echo $name.' '.$manifest['version'].' <- '.implode(', ',array_keys($manifest['dependencies']??[]))."\n";
+      }break;
+    case 'module:list':
+      $manager=App::get()->service(ModuleManager::class);
+      foreach($manager->available() as $name=>$info)echo sprintf("%-18s %-9s %s\n",$name,$manager->enabled($name)?'enabled':'disabled',$info['version']??'');break;
+    case 'module:plan':
+      if(count($args)<4||!in_array($args[3],['enable','disable'],true))throw new RuntimeException('Usage: module:plan NAME enable|disable [--json]');
+      $plan=App::get()->service(ModuleManager::class)->planChange((string)$args[2],$args[3]==='enable');
+      echo json_encode($plan,JSON_PRETTY_PRINT|JSON_THROW_ON_ERROR)."\n";break;
+    case 'module:enable':case 'module:disable':
+      if(empty($args[2]))throw new RuntimeException('Module name required');
+      App::get()->service(ModuleManager::class)->setEnabled($args[2],$command==='module:enable');echo "Updated: {$args[2]}\n";break;
+    case 'module:keygen':
+      $id=(string)($args[2]??'');ModulePackage::keyId($id);
+      $root=base_path('storage/private/module-keys');
+      if(!is_dir($root)&&!mkdir($root,0700,true))throw new RuntimeException('Cannot create key directory');
+      $private=$root.'/'.$id.'.secret';$public=$root.'/'.$id.'.public';
+      if(file_exists($private)||file_exists($public))throw new RuntimeException('Signing key already exists; rotate by creating a NEW key ID');
+      $pair=sodium_crypto_sign_keypair();
+      $secret=base64_encode(sodium_crypto_sign_secretkey($pair));
+      $pub=base64_encode(sodium_crypto_sign_publickey($pair));
+      $handle=fopen($private,'x');if($handle===false)throw new RuntimeException('Cannot create signing key');
+      try{chmod($private,0600);fwrite($handle,$secret."\n");}finally{fclose($handle);}
+      file_put_contents($public,$pub."\n",LOCK_EX);chmod($public,0600);
+      sodium_memzero($secret);
+      echo "Generated signing key at $private (keep offline/secret).\nPublic key: $pub\nTrust explicitly with module:key:trust.\n";break;
+    case 'module:key:trust':
+      if(count($args)!==4)throw new RuntimeException('Usage: module:key:trust KEY_ID PUBLIC_BASE64');
+      (new TrustedKeys(base_path('storage/private/module-trust.json')))->trust((string)$args[2],(string)$args[3]);
+      echo "Trusted signing key {$args[2]}.\n";break;
+    case 'module:key:revoke':
+      if(count($args)!==3)throw new RuntimeException('Usage: module:key:revoke KEY_ID');
+      (new TrustedKeys(base_path('storage/private/module-trust.json')))->revoke((string)$args[2]);
+      echo "Removed trusted signing key {$args[2]}. Existing installed modules are unaffected.\n";break;
+    case 'module:pack':
+      if(count($args)!==6)throw new RuntimeException('Usage: module:pack NAME KEY_ID SECRET_FILE OUTPUT.bfp');
+      ModulePackage::name($args[2]);ModulePackage::keyId($args[3]);
+      if(!str_ends_with($args[5],'.bfp')||is_link($args[4])||!is_file($args[4]))throw new RuntimeException('Invalid signing key or output path');
+      if((fileperms($args[4])&0077)!==0)throw new RuntimeException('Private signing key permissions must be 0600');
+      $secret=base64_decode(trim((string)file_get_contents($args[4])),true);
+      if($secret===false||strlen($secret)!==SODIUM_CRYPTO_SIGN_SECRETKEYBYTES)throw new RuntimeException('Invalid signing secret key');
+      $package=ModulePackage::build(base_path('modules/'.$args[2]),$args[3],$secret);
+      $encoded=ModulePackage::encode($package);
+      if(strlen($encoded)>ModulePackage::MAX_PACKAGE_BYTES)throw new RuntimeException('Package size exceeds maximum');
+      if(file_put_contents($args[5],$encoded,LOCK_EX)!==strlen($encoded))throw new RuntimeException('Cannot write module package');
+      echo "Signed module {$args[2]} {$package['payload']['version']} to {$args[5]}.\n";break;
+    case 'module:verify':case 'module:install':case 'module:backups':case 'module:rollback':
+      $installer=new ModuleInstaller(base_path('modules'),base_path('storage/private/modules.json'),base_path('storage/private'),new TrustedKeys(base_path('storage/private/module-trust.json')));
+      if($command==='module:backups'){
+        if(count($args)!==3)throw new RuntimeException('Usage: module:backups NAME');
+        foreach($installer->rollbacks($args[2]) as $id)echo $id."\n";
+        break;
+      }
+      $apply=$command!=='module:verify'&&in_array('--apply',$args,true);
+      if($apply&&(string)env('APP_ENV','production')==='production'&&(string)env('MODULE_MAINTENANCE','false')!=='true')throw new RuntimeException('Set MODULE_MAINTENANCE=true and put the site/workers into maintenance before production module changes');
+      if($command==='module:rollback'){
+        if(count($args)<4||count($args)>5||($args[4]??'--apply')!=='--apply')throw new RuntimeException('Usage: module:rollback NAME BACKUP_ID [--apply]');
+        $result=$installer->rollback($args[2],$args[3],$apply);
+      }else{
+        if(count($args)<3||count($args)>4||($args[3]??'--apply')!=='--apply')throw new RuntimeException('Usage: module:install FILE.bfp [--apply]');
+        $result=$installer->install($args[2],$apply);
+      }
+      echo json_encode($result,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
+      if(!$apply)echo "DRY RUN ONLY: no module files have been changed.\n";
+      else echo "Files updated. Run module:validate, migrations after review, tests and reload workers/FPM.\n";
+      break;
+    case 'module:migrate-disabled':
+      if(count($args)<3||count($args)>4||($args[3]??'--apply')!=='--apply')throw new RuntimeException('Usage: module:migrate-disabled NAME [--apply]');
+      $manager=App::get()->service(\Brightery\Core\Modules\ModuleManager::class);
+      if($manager->enabled($args[2]))throw new RuntimeException('Disable the module before applying its migrations');
+      $migrator=App::get()->service(Migrator::class);
+      $apply=in_array('--apply',$args,true);
+      $status=$migrator->statusForModule($args[2]);
+      if($apply){
+        if((string)env('APP_ENV','production')==='production'&&(string)env('MAINTENANCE_MODE','false')!=='true')throw new RuntimeException('Production offline migration requires MAINTENANCE_MODE=true');
+        $executed=$migrator->runDisabledModule($args[2]);
+      }else $executed=[];
+      echo json_encode(['applied'=>$apply,'module'=>$args[2],'status_before'=>$status,'executed'=>$executed],JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
+      if(!$apply)echo "DRY RUN. Add --apply after staging review and database backup.\n";
+      break;
+    case 'evolve:module':
+      if(count($args)<4||count($args)>5||!is_file($args[3]))throw new RuntimeException('Usage: evolve:module NAME BLUEPRINT.json [--apply]');
+      if(isset($args[4])&&$args[4]!=='--apply')throw new RuntimeException('Only --apply is supported');
+      if(filesize($args[3])>32768)throw new RuntimeException('Blueprint too large');
+      $definition=json_decode((string)file_get_contents($args[3]),true,16,JSON_THROW_ON_ERROR);
+      if(!is_array($definition))throw new RuntimeException('Invalid blueprint');
+      $evolver=new \Brightery\Core\Developer\ModuleEvolver(base_path('modules'));
+      $plan=$evolver->plan($args[2],$definition);
+      $apply=in_array('--apply',$args,true);
+      if($apply){
+        if((string)env('APP_ENV','production')==='production'&&(string)env('MAINTENANCE_MODE','false')!=='true')throw new RuntimeException('Production evolution requires MAINTENANCE_MODE=true');
+        if(App::get()->service(\Brightery\Core\Modules\ModuleManager::class)->enabled($args[2]))throw new RuntimeException('Disable module before evolving schema; run migration before enabling');
+        $evolver->apply($args[2],$definition,$plan['digest']);
+      }
+      echo json_encode(['applied'=>$apply,'module'=>$plan['module'],'added'=>$plan['added'],'migration'=>$plan['migration'],'sql'=>$plan['sql'],'digest'=>$plan['digest']],JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)."\n";
+      if($apply)echo "Review/apply migrations while module disabled, then enable and test.\n";
+      break;
+    case 'make:module':
+      if(count($args)<3||count($args)>4||!is_file($args[2]))throw new RuntimeException('Usage: make:module BLUEPRINT.json [--apply]');
+      if(isset($args[3])&&$args[3]!=='--apply')throw new RuntimeException('Only --apply is supported');
+      $file=$args[2];if(filesize($file)>32768)throw new RuntimeException('Blueprint too large');
+      $data=json_decode((string)file_get_contents($file),true,16,JSON_THROW_ON_ERROR);
+      if(!is_array($data))throw new RuntimeException('Blueprint must be a JSON object');
+      $generator=App::get()->service(ModuleScaffolder::class);$plan=$generator->plan($data);
+      if(in_array('--apply',$args,true)){
+        if((string)env('APP_ENV','production')==='production'&&(string)env('MAINTENANCE_MODE','false')!=='true')throw new RuntimeException('Production generation requires MAINTENANCE_MODE=true');
+        $generator->apply($data,$plan['digest']);
+      }
+      echo json_encode(['applied'=>in_array('--apply',$args,true),'module'=>$plan['schema']['name'],'files'=>$plan['files'],'migration'=>$plan['sql']],JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
+      break;
+    case 'route:list':
+      foreach($kernel->router->routes() as $route)echo str_pad($route['method'],7).' '.$route['path']."\n";break;
+    case 'cache:clear':
+      (new FileCache(base_path('storage/cache')))->flush();echo "File cache cleared.\n";break;
+    case 'lang:export':
+      $lang=$args[2]??'en';echo json_encode(App::get()->service(Translator::class)->load($lang),JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)."\n";break;
+    case 'lang:import':
+      if(empty($args[2])||empty($args[3])||!is_file($args[3]))throw new RuntimeException('Usage: lang:import LOCALE FILE');
+      $data=json_decode(file_get_contents($args[3]),true,512,JSON_THROW_ON_ERROR);
+      if(!is_array($data)||array_is_list($data))throw new RuntimeException('Dictionary must be JSON object');
+      App::get()->service(Translator::class)->save($args[2],$data);echo "Language imported.\n";break;
+    case 'tenant:list':
+      foreach(App::get()->service(Database::class)->rows('SELECT id,slug,display_name,status FROM tenants ORDER BY id DESC') as $row)
+        echo $row['id'].' '.str_pad($row['slug'],24).' '.$row['status'].' '.$row['display_name']."\n";
+      break;
+    case 'tenant:create':
+      $slug=strtolower(trim((string)($args[2]??'')));$name=trim((string)($args[3]??''));
+      if(!preg_match('/^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/D',$slug)||strlen($name)<2||strlen($name)>160)throw new RuntimeException('Usage: tenant:create SLUG "Company Name"');
+      App::get()->service(Database::class)->execute('INSERT INTO tenants(slug,display_name) VALUES(?,?)',[$slug,$name]);
+      echo "Created tenant $slug\n";break;
+    case 'tenant:domain':
+      $id=filter_var($args[2]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+      $host=HostTenantResolver::hostname((string)($args[3]??''));
+      if(!$id||$host===''||$host===HostTenantResolver::hostname((string)env('TENANCY_CONTROL_HOST',''))||$host==='localhost'||filter_var($host,FILTER_VALIDATE_IP))throw new RuntimeException('Usage: tenant:domain ID HOST (valid DNS hostname, not central host)');
+      if(!App::get()->service(Database::class)->row('SELECT id FROM tenants WHERE id=?',[$id]))throw new RuntimeException('Unknown tenant');
+      App::get()->service(Database::class)->execute('INSERT INTO tenant_domains(tenant_id,hostname) VALUES(?,?)',[$id,$host]);
+      echo "Assigned host $host to tenant $id\n";break;
+    case 'tenant:members':
+      $tenantId=filter_var($args[2]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+      if(!$tenantId)throw new RuntimeException('Usage: tenant:members ID');
+      foreach(App::get()->service(Database::class)->rows('SELECT m.user_id,m.role,u.email FROM tenant_memberships m JOIN users u ON u.id=m.user_id WHERE m.tenant_id=? ORDER BY m.user_id',[$tenantId]) as $member)echo $member['user_id'].' '.$member['role'].' '.$member['email']."\n";
+      break;
+    case 'invite:prune':
+      echo 'Pruned '.App::get()->service(TenantInvitations::class)->prune()." invitation(s).\n";break;
+    case 'queue:work':
+      $limit=100;
+      foreach(array_slice($args,2) as $option){
+        if($option==='--once'){$limit=1;continue;}
+        if(preg_match('/^--max=([0-9]+)$/D',$option,$m)){$limit=(int)$m[1];continue;}
+        throw new RuntimeException('Usage: queue:work [--once|--max=N]');
+      }
+      if($limit<1||$limit>1000)throw new RuntimeException('Max jobs must be 1-1000');
+      $worker=App::get()->service(\Brightery\Core\Jobs\Worker::class);
+      $registry=App::get()->service(WorkerRegistry::class);
+      $workerId=WorkerRegistry::workerId();
+      $registry->start($workerId);$processed=0;
+      try {
+        while($processed<$limit){
+          $registry->beat($workerId,'working');
+          $worked=$worker->one();
+          $registry->beat($workerId,'idle',$worked);
+          if(!$worked)break;
+          $processed++;
+        }
+      } finally {$registry->stop($workerId);}
+      echo "Processed $processed job(s).\n";break;
+    case 'queue:stats':
+      foreach(App::get()->service(\Brightery\Core\Jobs\Queue::class)->stats() as $status=>$total)echo "$status: $total\n";
+      break;
+    case 'schedule:run':
+      App::get()->service(\Brightery\Core\Tenancy\ContextStore::class)->set(new \Brightery\Core\Tenancy\TenantContext('central'));
+      try{$count=App::get()->service(\Brightery\Core\Scheduler\Schedule::class)->tick();}
+      finally{App::get()->service(\Brightery\Core\Tenancy\ContextStore::class)->clear();}
+      echo "Scheduled $count job(s).\n";break;
+    case 'schedule:list':
+      foreach(App::get()->service(\Brightery\Core\Scheduler\Schedule::class)->definitions() as $item)echo $item['name']." => ".$item['handler']." / ".$item['type']." ".$item['value']." (UTC)\n";
+      break;
+    case 'api:token':
+      if(count($args)<5)throw new RuntimeException('Usage: api:token USER_ID TENANT_ID|central NAME [scopes] [days]');
+      if(!function_exists('stream_isatty')||!stream_isatty(STDOUT))throw new RuntimeException('Issuing tokens requires an interactive TTY. Do not print tokens into cron logs.');
+      $userId=filter_var($args[2],FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+      $tenantId=$args[3]==='central'?null:filter_var($args[3],FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+      if(!$userId||($args[3]!=='central'&&!$tenantId))throw new RuntimeException('Invalid user/tenant ID');
+      $scopes=explode(',',(string)($args[5]??'profile:read'));
+      $days=(int)($args[6]??30);
+      echo App::get()->service(\Brightery\Core\Api\TokenService::class)->issue((int)$userId,$tenantId,$args[4],$scopes,$days)."\n";
+      break;
+    case 'api:revoke':
+      if(count($args)<4||!ctype_digit($args[2])||!ctype_digit($args[3]))throw new RuntimeException('Usage: api:revoke TOKEN_ID USER_ID');
+      $did=App::get()->service(\Brightery\Core\Api\TokenService::class)->revoke((int)$args[2],(int)$args[3]);
+      echo $did?'Revoked.\n':'No matching active token.\n';break;
+    case 'mail:test':
+      $recipient=\Brightery\Core\Mail\SmtpTransport::address((string)($args[2]??''));
+      App::get()->service(\Brightery\Core\Tenancy\ContextStore::class)->set(new \Brightery\Core\Tenancy\TenantContext('central'));
+      try{$jobId=App::get()->service(\Brightery\Core\Mail\Outbox::class)->enqueue($recipient,'Brightery Framework SMTP test','Test generated via php bin/console mail:test.');}
+      finally{App::get()->service(\Brightery\Core\Tenancy\ContextStore::class)->clear();}
+      echo "Queued test mail #$jobId. Run queue:work to deliver.\n";break;
+    case 'session:revoke-all':
+      $userId=filter_var($args[2]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+      if(!$userId||!function_exists('stream_isatty')||!stream_isatty(STDIN)||!stream_isatty(STDOUT))throw new RuntimeException('session:revoke-all USER_ID requires interactive operator terminal');
+      $account=App::get()->service(Database::class)->row('SELECT email FROM users WHERE id=?',[$userId]);
+      if(!$account)throw new RuntimeException('Account not found');
+      echo "Type account email to confirm session revocation: ";
+      $confirm=rtrim((string)fgets(STDIN),"\r\n");
+      if(!hash_equals((string)$account['email'],$confirm))throw new RuntimeException('Confirmation failed');
+      $revoked=App::get()->service(Database::class)->execute('UPDATE bf_account_sessions SET revoked_at=UTC_TIMESTAMP() WHERE user_id=? AND revoked_at IS NULL',[$userId]);
+      echo "Revoked $revoked session(s).\n";break;
+    case 'mfa:reset':
+      $userId=filter_var($args[2]??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);
+      if(!$userId||!function_exists('stream_isatty')||!stream_isatty(STDIN)||!stream_isatty(STDOUT))throw new RuntimeException('mfa:reset USER_ID requires an interactive operator terminal');
+      $account=App::get()->service(Database::class)->row('SELECT email FROM users WHERE id=?',[$userId]);
+      if(!$account)throw new RuntimeException('User not found');
+      echo "Emergency MFA reset for user $userId. Type exact account email to confirm: ";
+      $confirm=rtrim((string)fgets(STDIN),"\r\n");
+      if(!hash_equals((string)$account['email'],$confirm))throw new RuntimeException('Confirmation did not match');
+      $contexts=App::get()->service(\Brightery\Core\Tenancy\ContextStore::class);
+      $contexts->set(new \Brightery\Core\Tenancy\TenantContext('central'));
+      try{
+        App::get()->service(Database::class)->transactional(function(Database $db)use($userId):void {
+          $db->execute('DELETE FROM bf_totp_credentials WHERE user_id=?',[$userId]);
+          $db->execute('DELETE FROM bf_mfa_recovery_codes WHERE user_id=?',[$userId]);
+          $db->execute('UPDATE bf_account_sessions SET revoked_at=UTC_TIMESTAMP() WHERE user_id=? AND revoked_at IS NULL',[$userId]);
+          App::get()->service(\Brightery\Core\Audit\AuditTrail::class)->record('security.mfa.recovery_reset',null,'user',(string)$userId);
+        });
+      }finally{$contexts->clear();}
+      echo "MFA enrollment reset. Verify account holder identity out of band.\n";break;
+    case 'compat:check':
+      if(count($args)!==2)throw new RuntimeException('Usage: compat:check');
+      $report=App::get()->service(\Brightery\Core\Compatibility\ContractInspector::class)->check();
+      $report['modules']=App::get()->service(ModuleManager::class)->validate();
+      echo json_encode($report,JSON_PRETTY_PRINT|JSON_THROW_ON_ERROR|JSON_UNESCAPED_SLASHES)."\n";
+      if(!$report['compatible'])exit(1);
+      break;
+    case 'ops:requests':
+      $limit=2000;
+      if(isset($args[2])){
+        if(count($args)!==3||!preg_match('/^--limit=([1-9][0-9]{0,4})$/D',$args[2],$m))throw new RuntimeException('Usage: ops:requests [--limit=1..10000]');
+        $limit=(int)$m[1];
+      }
+      $result=\Brightery\Core\Observability\RequestSummary::read(base_path('storage/logs/requests.jsonl'),$limit);
+      echo json_encode($result,JSON_PRETTY_PRINT|JSON_THROW_ON_ERROR)."\n";break;
+    case 'ops:status':
+      if(count($args)>3||($args[2]??'--json')!=='--json')throw new RuntimeException('Usage: ops:status [--json]');
+      $report=App::get()->service(HealthReport::class)->snapshot();
+      echo json_encode($report,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";break;
+    case 'ops:prune':
+      $days=14;
+      if(isset($args[2])){if(count($args)!==3||!preg_match('/^--days=([0-9]{1,3})$/D',$args[2],$m))throw new RuntimeException('Usage: ops:prune [--days=N]');$days=(int)$m[1];}
+      echo 'Pruned '.App::get()->service(WorkerRegistry::class)->prune($days)." old heartbeat(s).\n";break;
+    case 'media:reconcile':
+      $scope=null;$apply=false;$confirm=null;$scopeSelections=0;
+      foreach(array_slice($args,2) as $arg){
+        if($arg==='--central'){$scope=0;$scopeSelections++;continue;}
+        if(preg_match('/^--tenant=([1-9][0-9]{0,9})$/D',$arg,$m)){$scope=(int)$m[1];$scopeSelections++;continue;}
+        if($arg==='--apply'){$apply=true;continue;}
+        if(preg_match('/^--confirm=(central|[1-9][0-9]{0,9})$/D',$arg,$m)){$confirm=$m[1];continue;}
+        throw new RuntimeException('Usage: media:reconcile --central|--tenant=N [--apply --confirm=SCOPE]');
+      }
+      if($scope===null||$scopeSelections!==1)throw new RuntimeException('Select exactly one explicit scope');
+      $reconciler=new MediaReconciler(App::get()->service(Database::class),base_path('storage/private/media'));
+      if($apply){
+        if($confirm!==($scope===0?'central':(string)$scope))throw new RuntimeException('Explicit --confirm scope required for repair');
+        $result=$reconciler->repair($scope);
+      }else{$result=$reconciler->preview($scope);}
+      echo json_encode($result,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";break;
+    case 'deploy:preflight':
+      if(count($args)>3||($args[2]??'--json')!=='--json')throw new RuntimeException('Usage: deploy:preflight [--json]');
+      $result=App::get()->service(ReleasePreflight::class)->inspect();
+      echo json_encode($result,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
+      if(!$result['ready'])exit(1);
+      break;
+    case 'deploy:finalize':
+      if(count($args)>3||($args[2]??'--apply')!=='--apply')throw new RuntimeException('Usage: deploy:finalize [--apply]');
+      $coordinator=new ReleaseCoordinator(App::get()->service(ReleasePreflight::class),App::get()->service(Migrator::class),base_path('storage/private'));
+      $result=isset($args[2])?$coordinator->apply():$coordinator->plan();
+      echo json_encode($result,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR)."\n";
+      if(!isset($args[2]))echo "DRY RUN ONLY: use --apply after backups, staging verification and draining traffic/workers.\n";
+      break;
+    case 'production:check':
+      if(count($args)>3||($args[2]??'--json')!=='--json')throw new RuntimeException('Usage: production:check [--json]');
+      $issues=array_merge(\Brightery\Core\Operations\ProductionReadiness::check(),\Brightery\Core\Operations\ProductionReadiness::system(base_path()));
+      echo json_encode(['ready'=>$issues===[],'issues'=>$issues],JSON_PRETTY_PRINT|JSON_THROW_ON_ERROR|JSON_UNESCAPED_SLASHES)."\n";
+      if($issues!==[])exit(2);
+      break;
+    case 'doctor':
+      echo 'Framework: '.Kernel::VERSION.' / PHP: '.PHP_VERSION."\n";
+      foreach(['pdo_mysql','fileinfo','sodium','opcache','mbstring','gd'] as $ext)echo sprintf("%-12s %s\n",$ext,extension_loaded($ext)?'OK':'MISSING'.(in_array($ext,['gd','mbstring'])?' (optional)':''));
+      echo 'tenancy mode: '.(string)env('TENANCY_MODE','single')."\n";
+      if((string)env('TENANCY_MODE','single')==='multi' && !in_array(HostTenantResolver::hostname((string)env('TENANCY_CONTROL_HOST','')),array_map('trim',explode(',',(string)env('TRUSTED_HOSTS',''))),true))echo "WARNING: TENANCY_CONTROL_HOST must appear in TRUSTED_HOSTS\n";
+      echo 'mail transport: '.(string)env('MAIL_DRIVER','disabled')."\n";
+      echo 'session registry: '.(string)env('SESSION_REGISTRY_ENABLED','true')."\n";
+      echo 'env: '.(is_file(base_path('.env'))?'PRESENT':'MISSING')."\n";
+      echo 'storage writable: '.(is_writable(base_path('storage/private'))?'YES':'NO')."\n";
+      break;
+    default:throw new RuntimeException("Unknown command: $command");
+ }
+}catch(Throwable $e){fwrite(STDERR,"ERROR: {$e->getMessage()}\n");exit(1);}

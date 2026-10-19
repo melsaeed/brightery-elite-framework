@@ -1,0 +1,16 @@
+{
+  "app.title": "إطار عمل برايتري",
+  "nav.dashboard": "لوحة التحكم",
+  "nav.modules": "الوحدات",
+  "nav.users": "المستخدمون",
+  "nav.groups": "المجموعات والصلاحيات",
+  "nav.translations": "الترجمات",
+  "nav.settings": "الإعدادات",
+  "nav.components": "عناصر الواجهة",
+  "nav.media": "مكتبة الملفات",
+  "nav.logout": "تسجيل الخروج",
+  "page.welcome": "من هنا تبدأ منصتك الجديدة",
+  "ui.save": "حفظ التغييرات",
+  "login.title": "تسجيل الدخول إلى مساحة العمل",
+  "nav.tenants": "الشركات والمستأجرون"
+}

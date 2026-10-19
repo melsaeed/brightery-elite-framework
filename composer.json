@@ -1,0 +1,29 @@
+{
+  "name": "brightery/framework-starter",
+  "description": "Brightery Framework 1.6.1 production hardening candidate: modular MVC, upgrade-safe modules, tenant isolation and hybrid UI",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.4",
+    "ext-json": "*",
+    "ext-pdo": "*",
+    "ext-fileinfo": "*",
+    "ext-pdo_mysql": "*",
+    "ext-sodium": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "Brightery\\Core\\": "core/",
+      "App\\": "app/",
+      "Modules\\": "modules/"
+    }
+  },
+  "scripts": {
+    "test": "php tests/run.php",
+    "test:integration": "php tests/integration_mysql.php",
+    "assets:build": "php bin/build-assets",
+    "test:race": "php tests/concurrency_mysql.php",
+    "test:production": "php tests/production.php",
+    "test:security": "php tests/security.php"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "app.title": "Brightery Framework",
+  "nav.dashboard": "Dashboard",
+  "nav.modules": "Modules",
+  "nav.users": "Users",
+  "nav.groups": "Groups & permissions",
+  "nav.translations": "Translations",
+  "nav.settings": "Settings",
+  "nav.components": "UI components",
+  "nav.media": "Media library",
+  "nav.logout": "Sign out",
+  "page.welcome": "Your next platform begins here",
+  "ui.save": "Save changes",
+  "login.title": "Sign in to your workspace",
+  "nav.tenants": "Tenants"
+}

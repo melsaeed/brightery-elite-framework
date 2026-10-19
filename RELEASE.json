@@ -1,0 +1,7 @@
+{
+  "name": "Brightery Framework",
+  "version": "1.6.1",
+  "module_api": "0.2.0",
+  "status": "Production hardening candidate; staging acceptance required",
+  "release_date": "2026-10-19"
+}

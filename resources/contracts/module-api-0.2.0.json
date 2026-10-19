@@ -1,0 +1,133 @@
+{
+  "api_version": "0.2.0",
+  "stability": "Public methods listed here remain callable across patch/minor Brightery releases; introducing incompatible signatures requires a new Module API line.",
+  "contracts": {
+    "Brightery\\Core\\Contracts\\ServiceProviderInterface": {
+      "register": {
+        "required_max": 1,
+        "parameters_min": 1,
+        "static": false
+      },
+      "boot": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      }
+    },
+    "Brightery\\Core\\Container": {
+      "bind": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "scoped": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "instance": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "alias": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "extend": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "get": {
+        "required_max": 1,
+        "parameters_min": 1,
+        "static": false
+      },
+      "has": {
+        "required_max": 1,
+        "parameters_min": 1,
+        "static": false
+      },
+      "resetScope": {
+        "required_max": 0,
+        "parameters_min": 0,
+        "static": false
+      }
+    },
+    "Brightery\\Core\\Events\\Hooks": {
+      "listen": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "emit": {
+        "required_max": 1,
+        "parameters_min": 1,
+        "static": false
+      },
+      "filter": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "apply": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      }
+    },
+    "Brightery\\Core\\Modules\\ModuleManager": {
+      "available": {
+        "required_max": 0,
+        "parameters_min": 0,
+        "static": false
+      },
+      "enabled": {
+        "required_max": 1,
+        "parameters_min": 1,
+        "static": false
+      },
+      "ordered": {
+        "required_max": 0,
+        "parameters_min": 0,
+        "static": false
+      },
+      "setEnabled": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "boot": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "register": {
+        "required_max": 1,
+        "parameters_min": 1,
+        "static": false
+      }
+    },
+    "Brightery\\Core\\Ui\\IslandRenderer": {
+      "register": {
+        "required_max": 2,
+        "parameters_min": 2,
+        "static": false
+      },
+      "render": {
+        "required_max": 1,
+        "parameters_min": 2,
+        "static": false
+      }
+    },
+    "Brightery\\Core\\Observability\\LoggerInterface": {
+      "write": {
+        "required_max": 2,
+        "parameters_min": 3,
+        "static": false
+      }
+    }
+  }
+}

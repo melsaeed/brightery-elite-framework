@@ -1,0 +1,20 @@
+(()=>{'use strict';const form=document.querySelector('[data-module-builder]');if(!form)return;
+const rows=form.querySelector('[data-bf-builder-fields]'),out=form.querySelector('[data-bf-builder-output]'),status=form.querySelector('[data-bf-builder-status]');
+const initial=JSON.parse(document.querySelector('[data-bf-builder-initial]').value);let fields=initial.fields.map(f=>({...f}));
+const el=(tag,props={})=>Object.assign(document.createElement(tag),props);
+const types=['text','textarea','email','integer','decimal','date','boolean','relation','many_to_many'];
+function render(){rows.replaceChildren();fields.forEach((f,i)=>{const row=el('div',{className:'bf-builder-row'});
+const name=el('input',{value:f.name,placeholder:'field_name',maxLength:40,required:true,pattern:'[a-z][a-z0-9_]{0,39}'});name.addEventListener('input',()=>f.name=name.value);
+const label=el('input',{value:f.label,placeholder:'Field label',maxLength:100,required:true});label.addEventListener('input',()=>f.label=label.value);
+const type=el('select');types.forEach(t=>{const opt=el('option',{value:t,textContent:t});if(t===f.type)opt.selected=true;type.append(opt)});
+const target=el('input',{value:f.references||'',placeholder:'Target module name',maxLength:36,pattern:'[A-Z][A-Za-z0-9]{1,35}'});
+function updateTarget(){target.hidden=!['relation','many_to_many'].includes(type.value);target.required=['relation','many_to_many'].includes(type.value);if(!['relation','many_to_many'].includes(type.value))delete f.references;else f.references=target.value;}
+target.addEventListener('input',()=>f.references=target.value);type.addEventListener('change',()=>{f.type=type.value;updateTarget()});updateTarget();
+const requireLabel=el('label',{className:'bf-builder-required'});const required=el('input',{type:'checkbox',checked:f.required});required.addEventListener('change',()=>f.required=required.checked);const syncRequired=()=>{if(type.value==='many_to_many'){required.checked=false;required.disabled=true;f.required=false;}else required.disabled=false;};type.addEventListener('change',syncRequired);syncRequired();requireLabel.append(required,document.createTextNode('Required'));
+const ruleInput=el('input',{type:'text',placeholder:'Rules: min..max (optional)',value:f.rules?(('min_length' in f.rules?f.rules.min_length:f.rules.min??'')+'..'+('max_length' in f.rules?f.rules.max_length:f.rules.max??'')):'',title:'Examples: 3..80 for text; 0..100 for integer. Bounds must be whole numbers.'});
+function updateRules(){const t=type.value;ruleInput.hidden=!['text','textarea','email','integer','decimal'].includes(t);if(ruleInput.hidden){delete f.rules;return;}const match=/^\s*(-?\d+)?\s*\.\.\s*(-?\d+)?\s*$/.exec(ruleInput.value);if(!match){delete f.rules;return;}const min=match[1]==null?null:Number(match[1]),max=match[2]==null?null:Number(match[2]);const numeric=['integer','decimal'].includes(t);const rules={};if(min!==null)rules[numeric?'min':'min_length']=min;if(max!==null)rules[numeric?'max':'max_length']=max;if(Object.keys(rules).length)f.rules=rules;else delete f.rules;}
+ruleInput.addEventListener('change',updateRules);type.addEventListener('change',()=>{ruleInput.value='';updateRules()});updateRules();
+const del=el('button',{type:'button',className:'btn btn-secondary',textContent:'×',title:'Remove field'});del.addEventListener('click',()=>{fields.splice(i,1);render()});
+row.append(name,label,type,target,ruleInput,requireLabel,del);rows.append(row)});}
+form.querySelector('[data-bf-add-column]').addEventListener('click',()=>{if(fields.length>=24){status.textContent='Maximum 24 columns';return;}fields.push({name:'field_'+(fields.length+1),label:'New field',type:'text',required:false});render()});
+form.addEventListener('submit',e=>{const schema={name:form.elements.name.value,title:form.elements.title.value,scope:form.elements.scope.value,fields};if(form.elements.soft_delete?.checked)schema.soft_delete=true;out.value=JSON.stringify(schema);if(fields.length===0||fields.length>24){e.preventDefault();status.textContent='Provide 1–24 fields';}});render();})();

@@ -1,0 +1,10 @@
+{
+  "name": "Catalog",
+  "title": "Product Catalog",
+  "scope": "tenant",
+  "fields": [
+    {"name": "title", "label": "Product name", "type": "text", "required": true},
+    {"name": "price", "label": "Price", "type": "decimal", "required": false},
+    {"name": "published", "label": "Published", "type": "boolean", "required": true}
+  ]
+}
